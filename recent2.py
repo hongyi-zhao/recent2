@@ -395,24 +395,24 @@ def query_builder(args, failure_exit_func):
         print(Term.FAIL + 'Only one of -re and -sql should be set' + Term.ENDC)
         failure_exit_func(1)
     num_status_filter = sum(
-        1 for x in [args.successes_only, args.failures_only, args.status_num != -1] if x)
+        1 for x in [args.success, args.failure, args.exit_code != -1] if x)
     if num_status_filter > 1:
-        print(Term.FAIL + ('Only one of --successes_only, --failures_only and '
-                           '--status_num has to be set') + Term.ENDC)
+        print(Term.FAIL + ('Only one of --success, --failure and '
+                           '--exit_code has to be set') + Term.ENDC)
         failure_exit_func(1)
     query = DB.TAIL_N_ROWS_TEMPLATE_DEDUP if args.dedup else DB.TAIL_N_ROWS_TEMPLATE
     filters = []
     parameters = []
-    if args.cur_session_only:
+    if args.cur_session:
         filters.append('session = ?')
         parameters.append(Session.session_id_string())
-    if args.successes_only:
+    if args.success:
         filters.append('return_val = 0')
-    if args.failures_only:
+    if args.failure:
         filters.append('return_val <> 0')
-    if args.status_num != -1:
+    if args.exit_code != -1:
         filters.append('return_val == ?')
-        parameters.append(args.status_num)
+        parameters.append(args.exit_code)
     if not args.return_self:
         # Dont return recent commands unless user asks for it.
         filters.append("""command not like 'recent%'""")
@@ -473,23 +473,23 @@ def make_arg_parser_for_recent():
     parser.add_argument('-n', metavar='20', help='max results to return', default=20)
 
     # Filters for command success/failure.
-    parser.add_argument('--status_num',
-                        '-stn',
+    parser.add_argument('--exit_code',
+                        '-e',
                         metavar='0',
                         help='int exit status of the commands to return. -1 => return all.',
                         default=-1)
-    parser.add_argument('--successes_only',
-                        '-so',
+    parser.add_argument('--success',
+                        '-s',
                         help='only return commands that exited with success',
                         action='store_true')
-    parser.add_argument('--failures_only',
-                        '-fo',
+    parser.add_argument('--failure',
+                        '-f',
                         help='only return commands that exited with failure',
                         action='store_true')
     # Other filters/options.
     parser.add_argument('-w', metavar='/folder', help='working directory', default='')
-    parser.add_argument('--cur_session_only',
-                        '-cs',
+    parser.add_argument('--cur_session',
+                        '-S',
                         help='Returns commands only from current session',
                         action='store_true')
     parser.add_argument('-d',
@@ -505,7 +505,7 @@ def make_arg_parser_for_recent():
                         help='Ignore commands longer than this.',
                         default=400)
     parser.add_argument('--env',
-                        '-e',
+                        '-E',
                         action='append',
                         help=('Filter by shell env vars. Env vars set in RECENT_ENV_VARS '
                               'as comma separated list will be captured.'),
