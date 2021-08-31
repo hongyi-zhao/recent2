@@ -16,6 +16,9 @@ from datetime import datetime
 from dateutil import tz
 
 
+recent_db = os.getenv('RECENT_DB', os.environ['HOME'] + '/.recent.db')
+EXPECTED_PROMPT = 'log-recent -r $__bp_last_ret_value -c "$(HISTTIMEFORMAT= history 1)" -p $$'
+
 class Term:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
@@ -28,10 +31,6 @@ class Term:
     YELLOW = '\033[0;33m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
-
-
-EXPECTED_PROMPT = 'log-recent -r $? -c "$(HISTTIMEFORMAT= history 1)" -p $$'
-
 
 class DB:
     SCHEMA_VERSION = 2
@@ -210,13 +209,12 @@ def parse_history(history):
         # log command discards if the command being logged has a suffix like "my_cmd <ts>"
         # If a user copy-pastes recent output, having this timestamp will look weird.
         copied_from_recent = \
-            re.search(r'^(.*)\s+# rtime@ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$', cmd)
+            re.search(r'^(.*)\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$', cmd)
         if copied_from_recent:
             cmd = copied_from_recent.group(1)
         return sequence, cmd
     else:
         return None, None
-
 
 def parse_date(date_format):
     if re.match(r'^\d{4}$', date_format):
@@ -229,9 +227,7 @@ def parse_date(date_format):
         print("Invalid date passed to -d")
         sys.exit(1)
 
-
 def create_connection():
-    recent_db = os.getenv('RECENT_DB', os.environ['HOME'] + '/.recent.db')
     conn = sqlite3.connect(recent_db, uri=recent_db.startswith("file:"))
     build_schema(conn)
     return conn
@@ -387,33 +383,29 @@ def import_bash_history():
     conn.commit()
     conn.close()
 
-
+    
 # Returns a list of queries to run for the given args
 # Return type: List(Pair(query, List(query_string)))
-def query_builder(args, failure_exit_func):
+def query_builder(args):
     if args.re and args.sql:
-        print(Term.FAIL + 'Only one of -re and -sql should be set' + Term.ENDC)
-        failure_exit_func(1)
-    num_status_filter = sum(
-        1 for x in [args.success, args.failure, args.exit_code != -1] if x)
-    if num_status_filter > 1:
-        print(Term.FAIL + ('Only one of --success, --failure and '
-                           '--exit_code has to be set') + Term.ENDC)
-        failure_exit_func(1)
+        sys.exit(Term.FAIL + 'Only one of -re and -sql should be set' + Term.ENDC)
+    sum_status = sum(1 for x in [args.failure, args.exit_code != -1] if x)
+    if sum_status > 1:
+        sys.exit(Term.FAIL + ('Only one of --failure and --exit_code has to be set') + Term.ENDC)
+        
     query = DB.TAIL_N_ROWS_TEMPLATE_DEDUP if args.dedup else DB.TAIL_N_ROWS_TEMPLATE
     filters = []
     parameters = []
     if args.cur_session:
         filters.append('session = ?')
         parameters.append(Session.session_id_string())
-    if args.success:
-        filters.append('return_val = 0')
     if args.failure:
-        filters.append('return_val <> 0')
+        #https://stackoverflow.com/questions/16749121/what-does-mean-in-python
+        filters.append('return_val != 0')
     if args.exit_code != -1:
         filters.append('return_val == ?')
         parameters.append(args.exit_code)
-    if not args.return_self:
+    if not args.self:
         # Dont return recent commands unless user asks for it.
         filters.append("""command not like 'recent%'""")
     if args.pattern:
@@ -425,12 +417,12 @@ def query_builder(args, failure_exit_func):
         else:
             filters.append('command like ?')
             parameters.append('%' + args.pattern + '%')
-    if args.w:
-        filters.append('pwd = ?')
-        parameters.append(str(Path(args.w).expanduser().absolute()))
     if args.d:
-        filters.append(parse_date(args.d))
-        parameters.append(args.d)
+        filters.append('pwd = ?')
+        parameters.append(str(Path(args.d).expanduser().absolute()))
+    if args.D:
+        filters.append(parse_date(args.D))
+        parameters.append(args.D)
     for env_var in args.env:
         split = env_var.split(":")
         if len(split) == 1:
@@ -438,7 +430,7 @@ def query_builder(args, failure_exit_func):
         else:
             filters.append('json_extract(json_data, "$.env.{}") = ?'.format(split[0]))
             parameters.append(split[1])
-    filters.append('length(command) <= {}'.format(args.char_limit))
+    filters.append('length(command) <= {}'.format(args.limit))
     try:
         n = int(args.n)
         parameters.append(n)
@@ -447,7 +439,7 @@ def query_builder(args, failure_exit_func):
     where = 'where ' + ' and '.join(filters) if len(filters) > 0 else ''
 
     ret = []
-    if not args.nocase:
+    if not args.insensitive:
         # No params required for case on query.
         ret.append((DB.CASE_ON, []))
     query_and_params = query.replace('where', where), parameters
@@ -469,39 +461,45 @@ def make_arg_parser_for_recent():
                                                                    'recent-import-bash-history' +
                                                                    Term.ENDC)
     parser = argparse.ArgumentParser(description=description, epilog=epilog)
-    parser.add_argument('pattern', nargs='?', default='', help='optional pattern to search')
-    parser.add_argument('-n', metavar='20', help='max results to return', default=20)
+    parser.add_argument('pattern',
+                        nargs='?', 
+                        default='', 
+                        help='optional pattern to search')
+    
+    parser.add_argument('-n', 
+                        metavar='NUM',
+                        help='max results to return', 
+                        default=20)
 
     # Filters for command success/failure.
     parser.add_argument('--exit_code',
                         '-e',
-                        metavar='0',
+                        metavar='CODE',
                         help='int exit status of the commands to return. -1 => return all.',
                         default=-1)
-    parser.add_argument('--success',
-                        '-s',
-                        help='only return commands that exited with success',
-                        action='store_true')
     parser.add_argument('--failure',
                         '-f',
                         help='only return commands that exited with failure',
                         action='store_true')
     # Other filters/options.
-    parser.add_argument('-w', metavar='/folder', help='working directory', default='')
+    parser.add_argument('-d',
+                        metavar='DIR',
+                        help='The Directory where the command runs', 
+                        default='')
     parser.add_argument('--cur_session',
-                        '-S',
+                        '-c',
                         help='Returns commands only from current session',
                         action='store_true')
-    parser.add_argument('-d',
-                        metavar='2016-10-01',
-                        help='date in YYYY-MM-DD, YYYY-MM, or YYYY format',
+    parser.add_argument('-D',
+                        metavar='DATE',
+                        help='date in YYYY, YYYY-MM, or YYYY-MM-DD formats',
                         default='')
-    parser.add_argument('--return_self',
+    parser.add_argument('--self',
+                        '-S',
                         help='Return `recent` commands also in the output',
                         action='store_true')
-    parser.add_argument('--char_limit',
-                        '-cl',
-                        metavar='200',
+    parser.add_argument('--limit',
+                        '-L',
                         help='Ignore commands longer than this.',
                         default=400)
     parser.add_argument('--env',
@@ -511,29 +509,45 @@ def make_arg_parser_for_recent():
                               'as comma separated list will be captured.'),
                         metavar='key[:val]',
                         default=[])
-    parser.add_argument('--dedup', action='store_true', help=('ok'))
+    parser.add_argument('--dedup',
+                        '-p', 
+                        action='store_true', 
+                        help=('Deduplication'))
 
     # CONTROL OUTPUT FORMAT
     # Hide time. This makes copy-pasting simpler.
-    parser.add_argument('--hide_time',
-                        '-ht',
+    parser.add_argument('--time_hide',
+                        '-t',
                         help='dont display time in command output',
                         action='store_true')
-    parser.add_argument('--time_first', '-tf', help='Print time first', action='store_true')
-    parser.add_argument('--debug', help='Debug mode', action='store_true')
-    parser.add_argument('--detail', help='Return detailed output', action='store_true')
+    parser.add_argument('--debug',
+                        '-G', 
+                        help='Debug mode', 
+                        action='store_true')
+    parser.add_argument('--detail',
+                        '-l',  
+                        help='Return detailed output', 
+                        action='store_true')
     parser.add_argument(
         '--columns',
+        '-C',
+        metavar='COL',
         help=('Comma separated columns to print if --detail is passed. Valid columns are '
               'command_dt,command,pid,return_val,pwd,session,json_data'),
         default="command_dt,command,json_data")
 
     # Query type - regex/sql.
-    parser.add_argument('-re', help='enable regex search pattern', action='store_true')
-    parser.add_argument('-sql', help='enable sqlite search pattern', action='store_true')
-    parser.add_argument('--nocase',
-                        '-nc',
-                        help='Ignore case when searching for patterns',
+    parser.add_argument('-re',
+                        '-r', 
+                        help='enable regex search pattern', 
+                        action='store_true')
+    parser.add_argument('-sql',
+                        '-s', 
+                        help='enable sqlite search pattern', 
+                        action='store_true')
+    parser.add_argument('--insensitive',
+                        '-i',
+                        help='ignore case distinctions in patterns and data',
                         action='store_true')
     return parser
 
@@ -563,7 +577,7 @@ def pad(raw_text, print_text):
     return print_text + (' ' * to_pad)
 
 
-def handle_recent_command(args, failure_exit_func):
+def handle_recent_command(args):
     check_prompt(args.debug)  # Fail the command if PROMPT_COMMAND is not set
     conn = create_connection()
     # Install REGEXP sqlite UDF.
@@ -582,7 +596,7 @@ def handle_recent_command(args, failure_exit_func):
     detail_results = []
     columns_to_print = set(args.columns.split(','))
     columns_to_print.update(['command_dt', 'command', 'return_val'])
-    for query, parameters in query_builder(args, failure_exit_func):
+    for query, parameters in query_builder(args):
         for row in c.execute(query, parameters):
             query_columns = DB.TAIL_N_ROWS_DEDUP_COLUMNS if args.dedup else DB.TAIL_N_ROWS_COLUMNS
             row_dict = {
@@ -602,9 +616,9 @@ def handle_recent_command(args, failure_exit_func):
                 # We do > 0 because for commands we got via import_bash_history, the return_val
                 # is negative
                 colored_cmd = Term.FAIL + colored_cmd + Term.ENDC
-            if args.hide_time:
+            if args.time_hide:
                 print(colored_cmd)
-            if not args.hide_time:
+            if not args.time_hide:
                 #https://www.sqlite.org/lang_datefunc.html
                 #https://groups.google.com/g/comp.lang.python/c/PhtX3V0jsSA/m/7cSdd0y7BQAJ
                 #https://stackoverflow.com/questions/4770297/convert-utc-datetime-string-to-local-datetime
@@ -612,11 +626,8 @@ def handle_recent_command(args, failure_exit_func):
                 to_zone = tz.tzlocal()
                 cmd_time = row_dict["command_dt"]
                 cmd_time = datetime.strptime(cmd_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=from_zone).astimezone(to_zone).strftime("%Y-%m-%d %H:%M:%S")
-                if args.time_first:
-                    print(f'{Term.YELLOW}{cmd_time}{Term.ENDC} {colored_cmd}')
-                else:
-                    padded_cmd = pad(raw_text=row_dict['command'], print_text=colored_cmd)
-                    print(f'{padded_cmd} # rtime@ {Term.YELLOW}{cmd_time}{Term.ENDC}')
+                print(f'{Term.YELLOW}{cmd_time}{Term.ENDC} {colored_cmd}')
+
     if args.detail:
         if 'json_data' not in columns_to_print:
             print(tabulate(detail_results, headers="keys"))
@@ -634,15 +645,15 @@ def handle_recent_command(args, failure_exit_func):
         print("---SCHEMA---")
         print(schema)
         print("---QUERIES---")
-        print("To replicate(ish) this output run the following sqlite command")
-        print("""sqlite3 ~/.recent.db "{}" """.format('; '.join(queries_executed)))
+        print("To reproduce this output run the following sqlite command")
+        print("""sqlite3 {} "{}" """.format(recent_db, '; '.join(queries_executed)))
     conn.close()
 
 
 def main():
     parser = make_arg_parser_for_recent()
     args = parser.parse_args()
-    handle_recent_command(args, parser.exit)
+    handle_recent_command(args)
 
 
 if __name__ == '__main__':
