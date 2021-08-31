@@ -9,8 +9,11 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-
 from tabulate import tabulate
+
+from datetime import datetime
+# pip install python-dateutil
+from dateutil import tz
 
 
 class Term:
@@ -602,7 +605,13 @@ def handle_recent_command(args, failure_exit_func):
             if args.hide_time:
                 print(colored_cmd)
             if not args.hide_time:
+                #https://www.sqlite.org/lang_datefunc.html
+                #https://groups.google.com/g/comp.lang.python/c/PhtX3V0jsSA/m/7cSdd0y7BQAJ
+                #https://stackoverflow.com/questions/4770297/convert-utc-datetime-string-to-local-datetime
+                from_zone = tz.tzutc()
+                to_zone = tz.tzlocal()
                 cmd_time = row_dict["command_dt"]
+                cmd_time = datetime.strptime(cmd_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=from_zone).astimezone(to_zone).strftime("%Y-%m-%d %H:%M:%S")
                 if args.time_first:
                     print(f'{Term.YELLOW}{cmd_time}{Term.ENDC} {colored_cmd}')
                 else:
