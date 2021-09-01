@@ -520,7 +520,7 @@ def make_arg_parser_for_recent():
     # Hide time. This makes copy-pasting simpler.
     parser.add_argument('-t',
                         '--time',
-                        help='Displays the time converted based on the local time zone',
+                        help='Displays the local time converted from UTC',
                         action='store_true')
     parser.add_argument('-g',
                         '--debug', 
