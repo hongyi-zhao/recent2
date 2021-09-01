@@ -625,8 +625,7 @@ def handle_recent_command(args):
                 #https://stackoverflow.com/questions/4770297/convert-utc-datetime-string-to-local-datetime
                 from_zone = tz.tzutc()
                 to_zone = tz.tzlocal()
-                cmd_time = row_dict["command_dt"]
-                cmd_time = datetime.strptime(cmd_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=from_zone).astimezone(to_zone).strftime("%Y-%m-%d %H:%M:%S")
+                cmd_time = datetime.strptime(row_dict["command_dt"], '%Y-%m-%d %H:%M:%S').replace(tzinfo=from_zone).astimezone(to_zone).strftime("%Y-%m-%d %H:%M:%S")
                 print(f'{Term.YELLOW}{cmd_time}{Term.ENDC} {colored_cmd}')
             else:
                 print(colored_cmd) 
