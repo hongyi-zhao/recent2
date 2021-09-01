@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+#https://github.com/kislyuk/argcomplete#synopsis
+import argcomplete
 import argparse
 import hashlib
 import json
@@ -547,6 +549,8 @@ def make_arg_parser_for_recent():
                         '--insensitive',
                         help='ignore case distinctions in patterns and data',
                         action='store_true')
+    # https://github.com/awaxa/recent2/commit/eeead062675b89489674654e4b5c8def467a2e08                   
+    argcomplete.autocomplete(parser)                    
     return parser
 
 
