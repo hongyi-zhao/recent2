@@ -387,32 +387,32 @@ def import_bash_history():
 # Returns a list of queries to run for the given args
 # Return type: List(Pair(query, List(query_string)))
 def query_builder(args):
-    if args.re and args.sql:
+    if args.r and args.s:
         sys.exit(Term.FAIL + 'Only one of -re and -sql should be set' + Term.ENDC)
-    sum_status = sum(1 for x in [args.failure, args.exit_code != -1] if x)
+    sum_status = sum(1 for x in [args.failure, args.code != -1] if x)
     if sum_status > 1:
-        sys.exit(Term.FAIL + ('Only one of --failure and --exit_code has to be set') + Term.ENDC)
+        sys.exit(Term.FAIL + ('Only one of --failure and --code has to be set') + Term.ENDC)
         
     query = DB.TAIL_N_ROWS_TEMPLATE_DEDUP if args.dedup else DB.TAIL_N_ROWS_TEMPLATE
     filters = []
     parameters = []
-    if args.cur_session:
+    if args.session:
         filters.append('session = ?')
         parameters.append(Session.session_id_string())
     if args.failure:
         #https://stackoverflow.com/questions/16749121/what-does-mean-in-python
         filters.append('return_val != 0')
-    if args.exit_code != -1:
+    if args.code != -1:
         filters.append('return_val == ?')
-        parameters.append(args.exit_code)
+        parameters.append(args.code)
     if not args.self:
         # Dont return recent commands unless user asks for it.
         filters.append("""command not like 'recent%'""")
     if args.pattern:
-        if args.re:
+        if args.r:
             filters.append('command REGEXP ?')
             parameters.append(args.pattern)
-        elif args.sql:
+        elif args.s:
             filters.append(args.pattern)
         else:
             filters.append('command like ?')
@@ -472,13 +472,13 @@ def make_arg_parser_for_recent():
                         default=20)
 
     # Filters for command success/failure.
-    parser.add_argument('--exit_code',
-                        '-e',
+    parser.add_argument('-e',
+                        '--code',
                         metavar='CODE',
                         help='int exit status of the commands to return. -1 => return all.',
                         default=-1)
-    parser.add_argument('--failure',
-                        '-f',
+    parser.add_argument('-f',
+                        '--failure',
                         help='only return commands that exited with failure',
                         action='store_true')
     # Other filters/options.
@@ -486,67 +486,65 @@ def make_arg_parser_for_recent():
                         metavar='DIR',
                         help='The Directory where the command runs', 
                         default='')
-    parser.add_argument('--cur_session',
-                        '-c',
+    parser.add_argument('-N',
+                        '--session',
                         help='Returns commands only from current session',
                         action='store_true')
     parser.add_argument('-D',
                         metavar='DATE',
                         help='date in YYYY, YYYY-MM, or YYYY-MM-DD formats',
                         default='')
-    parser.add_argument('--self',
-                        '-S',
+    parser.add_argument('-S',
+                        '--self',
                         help='Return `recent` commands also in the output',
                         action='store_true')
-    parser.add_argument('--limit',
-                        '-L',
+    parser.add_argument('-L',
+                        '--limit',
                         help='Ignore commands longer than this.',
                         default=400)
-    parser.add_argument('--env',
-                        '-E',
+    parser.add_argument('-E',
+                        '--env',
                         action='append',
                         help=('Filter by shell env vars. Env vars set in RECENT_ENV_VARS '
                               'as comma separated list will be captured.'),
                         metavar='key[:val]',
                         default=[])
-    parser.add_argument('--dedup',
-                        '-p', 
+    parser.add_argument('-p',
+                        '--dedup', 
                         action='store_true', 
                         help=('Deduplication'))
 
     # CONTROL OUTPUT FORMAT
     # Hide time. This makes copy-pasting simpler.
-    parser.add_argument('--time_hide',
-                        '-t',
-                        help='dont display time in command output',
+    parser.add_argument('-t',
+                        '--time',
+                        help='Displays the time converted based on the local time zone',
                         action='store_true')
-    parser.add_argument('--debug',
-                        '-G', 
+    parser.add_argument('-g',
+                        '--debug', 
                         help='Debug mode', 
                         action='store_true')
-    parser.add_argument('--detail',
-                        '-l',  
+    parser.add_argument('-l',
+                        '--detail',  
                         help='Return detailed output', 
                         action='store_true')
     parser.add_argument(
+        '-c',
         '--columns',
-        '-C',
         metavar='COL',
         help=('Comma separated columns to print if --detail is passed. Valid columns are '
               'command_dt,command,pid,return_val,pwd,session,json_data'),
         default="command_dt,command,json_data")
 
     # Query type - regex/sql.
-    parser.add_argument('-re',
-                        '-r', 
+    parser.add_argument('-r',
                         help='enable regex search pattern', 
                         action='store_true')
-    parser.add_argument('-sql',
-                        '-s', 
+    parser.add_argument('-s',
                         help='enable sqlite search pattern', 
                         action='store_true')
-    parser.add_argument('--insensitive',
-                        '-i',
+    parser.add_argument('-i',
+                        '--insensitive',
                         help='ignore case distinctions in patterns and data',
                         action='store_true')
     return parser
@@ -616,9 +614,8 @@ def handle_recent_command(args):
                 # We do > 0 because for commands we got via import_bash_history, the return_val
                 # is negative
                 colored_cmd = Term.FAIL + colored_cmd + Term.ENDC
-            if args.time_hide:
-                print(colored_cmd)
-            if not args.time_hide:
+                
+            if args.time:
                 #https://www.sqlite.org/lang_datefunc.html
                 #https://groups.google.com/g/comp.lang.python/c/PhtX3V0jsSA/m/7cSdd0y7BQAJ
                 #https://stackoverflow.com/questions/4770297/convert-utc-datetime-string-to-local-datetime
@@ -627,7 +624,10 @@ def handle_recent_command(args):
                 cmd_time = row_dict["command_dt"]
                 cmd_time = datetime.strptime(cmd_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=from_zone).astimezone(to_zone).strftime("%Y-%m-%d %H:%M:%S")
                 print(f'{Term.YELLOW}{cmd_time}{Term.ENDC} {colored_cmd}')
+            else:
+                print(colored_cmd) 
 
+            
     if args.detail:
         if 'json_data' not in columns_to_print:
             print(tabulate(detail_results, headers="keys"))
