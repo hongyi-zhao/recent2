@@ -389,6 +389,8 @@ def import_bash_history():
 # Returns a list of queries to run for the given args
 # Return type: List(Pair(query, List(query_string)))
 def query_builder(args):
+    # TODO
+    #https://docs.python.org/3/library/argparse.html#mutual-exclusion
     if args.r and args.s:
         sys.exit(Term.FAIL + 'Only one of -re and -sql should be set' + Term.ENDC)
     sum_status = sum(1 for x in [args.failure, args.code != -1] if x)
